@@ -355,3 +355,47 @@ erDiagram
     PROGRAM ||--o{ COPYBOOK : "USES_COPYBOOK"
 
 ```
+
+
+
+# Capability Discovery
+We want to bridge the gap between high-level business domains (Business Capabilities) and low-level mainframe technical assets (Jobs, Programs, Copybooks, Utilities, Stored Procedures) by leveraging semantic search and knowledge graph traversal.
+
+### Rephrased & Enhanced Feature Specification: **Semantic Capability Discovery & Graph Tagging**
+
+* **Objective:** Automatically map high-level enterprise business capabilities (provided via a title and a 4-5 sentence functional summary) down to their exact technical implementation layers within the Neo4j Knowledge Graph.
+* **Input Parameters:**
+    1. `capability_name`: The high-level business domain name (e.g., *"Customer Financial Ledger Management"*).
+    2. `capability_summary`: A 4-5 sentence rich narrative describing the business intent, triggers, data processing rules, and expected outcomes.
+
+
+* **Workflow Stages:**
+    1. **Vectorization:** The capability summary is transformed into a 768-dimensional vector embedding using the local embedding model (`ai/embeddinggemma:latest`).
+    2. **Semantic Seeding & Similarity Matching:** The system queries the Neo4j vector index (`program_vectors`) to identify the closest matching core COBOL programs and business logic chunks.
+    3. **Multi-Hop Graph Expansion:** The graph engine crawls outward from the matched programs to automatically discover linked upstream JCL jobs, downstream copybooks, databases, and utility modules.
+    4. **Dynamic Ontology Enrichment (Tagging):** The system injects new `:Capability` and `:SubCapability` nodes into Neo4j and establishes explicit relationships (`IMPLEMENTS`, `DECOMPOSES_INTO`, `EXECUTES`, `USES_COPYBOOK`) to visually group the technical assets under the business domain.
+
+## Business Capability Modernization Report
+To seamlessly tie this new **Capability Discovery** feature into your existing local pipeline, we can extend your architecture to automatically generate a **Business Capability Modernization Report** using the newly tagged graph context.
+
+Here is how we can integrate capability-driven reporting into your workflow.
+
+### Step 1: Add Capability-Driven Report Generation 
+Create a script that takes a discovered capability, pulls its entire multi-hop neighborhood from Neo4j (Jobs, Programs, Copybooks, Sub-capabilities), and passes that enriched context to your local Docker LLM (`llama-3.2-1b-instruct-gguf`) for enterprise synthesis.
+
+
+### Step 2: Run the End-to-End Discovery & Reporting Pipeline
+
+1. Run your capability mapping script:
+```bash
+python src/capability_discovery.py
+
+```
+
+
+2. Generate the deep-dive LLM architectural report based on the discovered graph relationships:
+```bash
+python src/capability_report.py
+
+```
+
