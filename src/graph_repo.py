@@ -95,7 +95,7 @@ class Neo4jGraphRepository:
         FOR (p:Program) 
         ON (p.embedding)
         OPTIONS { indexConfig: {
-          `vector.dimensions`: 1536,
+          `vector.dimensions`: 768,
           `vector.similarity_function`: 'cosine'
         }}
         """

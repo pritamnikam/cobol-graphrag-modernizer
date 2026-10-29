@@ -3,6 +3,32 @@ from openai import OpenAI
 
 logger = logging.getLogger("HybridSearchService")
 
+MODERNIZATION_PROMPT_TEMPLATE = """
+You are a Principal Legacy Systems Architect and Senior Cloud Migration Engineer.
+Analyze the following retrieved COBOL programs, copybooks, and JCL job dependencies from the graph database.
+
+### Retrieved Context:
+{context}
+
+### Analysis Goal:
+Provide a rigorous, developer-ready Technical Modernization & Refactoring Blueprint. Avoid generic advice. Focus exclusively on concrete code transformation, data contracts, and risk mitigation.
+
+Your response must follow this exact markdown structure:
+
+1. **System Architecture & Dependency Mapping**
+   - Detail the caller/callee relationships between JCL jobs, COBOL programs (`CUSTUPD0`, `INTRCALC`), and shared copybooks (`CUSTREC`, `ACCTREC`).
+   - Identify shared state variables or tight couplings.
+
+2. **Business Logic Extraction**
+   - Precisely document the conditional rules (e.g., VIP threshold logic, monthly interest compounding rates).
+
+3. **Target Python/Microservice Blueprint**
+   - Provide a clean, modern Python snippet (using Pydantic or FastAPI patterns) translating the core business rules of the legacy programs.
+
+4. **Data Migration & Risk Strategy**
+   - Outline database schema migration steps from fixed-width sequential files/VSAM to a modern relational/document store.
+   - Note potential numerical truncation risks (e.g., PIC 9(07)V99).
+"""
 
 class HybridSearchService:
   """Performs native Neo4j vector search combined with multi-hop graph traversal."""
@@ -52,16 +78,7 @@ class HybridSearchService:
     combined_context = "\n".join(context_snippets)
 
     # 3. Synthesize via LLM
-    prompt = f"""
-        You are an Enterprise Legacy Systems Architect. 
-        Using the following hybrid graph-retrieved context from our mainframe repository, 
-        write a formal Business Analysis & Modernization Report addressing: '{user_query}'.
-        
-        Context:
-        {combined_context}
-        
-        Provide an Executive Summary, Core Business Rules, Data Lineage, and Modernization Advice.
-        """
+    prompt = MODERNIZATION_PROMPT_TEMPLATE.format(context=combined_context)
 
     completion = self.openai_client.chat.completions.create(
         model=self.settings.chat_model,
