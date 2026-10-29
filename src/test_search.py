@@ -1,42 +1,49 @@
 import os
-from dotenv import load
-from langchain_community.graphs import Neo4jGraph
-from langchain_community.vectorstores import Neo4jVector
-from langchain_openai import OpenAIEmbeddings
+from dotenv import load_dotenv
+from neo4j import GraphDatabase
+from openai import OpenAI
 
-load()
+load_dotenv()
 
-# Initialize embeddings pointing to your Docker local model
-embeddings = OpenAIEmbeddings(
-    base_url=os.getenv("LOCAL_AI_BASE_URL", "http://localhost:11434/v1"),
+# Initialize OpenAI client pointing to Docker Model Runner
+openai_client = OpenAI(
+    base_url=os.getenv("LOCAL_AI_BASE_URL", "http://localhost:12434/engines/v1"),
     api_key=os.getenv("LOCAL_AI_API_KEY", "not-needed"),
-    model=os.getenv("LOCAL_EMBEDDING_MODEL", "ai/embeddinggemma:latest"),
-    check_embedding_ctx_length=False,
 )
 
-# Connect to Neo4j
-graph = Neo4jGraph(
-    url=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
-    username=os.getenv("NEO4J_USER", "neo4j"),
-    password=os.getenv("NEO4J_PASSWORD", "password"),
+embedding_model = os.getenv("LOCAL_EMBEDDING_MODEL", "ai/embeddinggemma:latest")
+
+NEO4J_URI = os.getenv("NEO4J_URI", "bolt://127.0.0.1:7687")
+NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
+
+# Sample query text
+query_text = (
+    "Find COBOL code handling customer account balance calculation or interest"
 )
 
-# Load existing vector store
-vector_store = Neo4jVector.from_existing_index(
-    embedding=embeddings,
-    url=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
-    username=os.getenv("NEO4J_USER", "neo4j"),
-    password=os.getenv("NEO4J_PASSWORD", "password"),
-    index_name="cobol_code_embeddings",  # Match your index name
-    node_label="CodeChunk",
-    text_node_property="text",
-)
+print(f"Generating embedding for query: '{query_text}'...")
+response = openai_client.embeddings.create(input=query_text, model=embedding_model)
+query_vector = response.data[0].embedding
 
-# Run a sample semantic search query
-query = "Find COBOL code handling customer account balance calculation or interest"
-results = vector_store.similarity_search(query, k=3)
+print(f"Query vector generated successfully! Dimensions: {len(query_vector)}")
 
-print("--- Semantic Search Results ---")
-for i, res in enumerate(results):
-    print(f"\n[Result {i+1}]")
-    print(res.page_content[:300])  # Print snippet of code/doc
+cypher_query = """
+CALL db.index.vector.queryNodes('program_vectors', $k, $embedding)
+YIELD node, score
+RETURN node.name AS name, node.business_logic AS logic, score
+"""
+
+print("\n--- Semantic Search Results ---")
+# Using driver as a context manager ensures clean disposal before script exit
+with GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD)) as driver:
+  with driver.session() as session:
+    result = session.run(cypher_query, {"k": 3, "embedding": query_vector})
+    for i, record in enumerate(result):
+      print(
+          f"\n[Result {i+1}] Program: {record['name']} (Score:"
+          f" {record['score']:.4f})"
+      )
+      print(record["logic"][:300] if record["logic"] else "No logic text")
+
+print("\n✨ Search completed cleanly!")
