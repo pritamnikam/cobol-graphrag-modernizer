@@ -31,8 +31,10 @@ class CobolParserService:
 
           if file.endswith(".jcl"):
             job_name = file.split(".")[0]
-            programs = re.findall(
-                r"EXEC\s+PGM=([A-Z0-9]+)", content, re.IGNORECASE
+            steps = re.findall(
+                r"^\s*//([A-Z0-9@$#]+)\s+EXEC\s+PGM=([A-Z0-9]+)",
+                content,
+                re.IGNORECASE | re.MULTILINE,
             )
             datasets = re.findall(
                 r"DD\s+DSN=([A-Z0-9.]+)", content, re.IGNORECASE
@@ -40,13 +42,29 @@ class CobolParserService:
             parsed_data["jobs"].append(
                 {"name": job_name, "code": content, "datasets": datasets}
             )
-            for p in programs:
+            for step_order, (step_name, program_name) in enumerate(steps, 1):
               parsed_data["relations"].append({
                   "from": job_name,
                   "from_type": "Job",
-                  "to": p,
+                  "to": program_name,
                   "to_type": "Program",
                   "rel": "EXECUTES",
+                  "step_order": step_order,
+                  "step_name": step_name,
+              })
+
+            dependencies = re.findall(
+                r"^\s*//\*\s*DEPENDS-ON:\s*([A-Z0-9_]+)",
+                content,
+                re.IGNORECASE | re.MULTILINE,
+            )
+            for dependency in dependencies:
+              parsed_data["relations"].append({
+                  "from": job_name,
+                  "from_type": "Job",
+                  "to": dependency,
+                  "to_type": "Job",
+                  "rel": "DEPENDS_ON",
               })
 
           elif file.endswith(".cbl"):
@@ -75,6 +93,20 @@ class CobolParserService:
                   "to": c,
                   "to_type": "Copybook",
                   "rel": "USES_COPYBOOK",
+              })
+
+            called_programs = re.findall(
+                r"\bCALL\s+['\"]([A-Z0-9-]+)['\"]",
+                content,
+                re.IGNORECASE,
+            )
+            for called_program in called_programs:
+              parsed_data["relations"].append({
+                  "from": prog_name,
+                  "from_type": "Program",
+                  "to": called_program,
+                  "to_type": "Program",
+                  "rel": "CALLS",
               })
 
           elif file.endswith(".cpy"):

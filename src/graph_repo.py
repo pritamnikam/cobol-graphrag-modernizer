@@ -83,8 +83,18 @@ class Neo4jGraphRepository:
                 MATCH (a {{name: $from_name}})
                 MATCH (b {{name: $to_name}})
                 MERGE (a)-[r:{rel['rel']}]->(b)
+                SET r.step_order = $step_order,
+                    r.step_name = $step_name
                 """
-        session.run(cypher, {"from_name": rel["from"], "to_name": rel["to"]})
+        session.run(
+            cypher,
+            {
+                "from_name": rel["from"],
+                "to_name": rel["to"],
+                "step_order": rel.get("step_order"),
+                "step_name": rel.get("step_name"),
+            },
+        )
 
     self._create_vector_index()
     logger.info("Graph ingestion and vector indexing completed successfully.")

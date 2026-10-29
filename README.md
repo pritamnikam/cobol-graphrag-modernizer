@@ -8,7 +8,7 @@ Supports **both** local privacy-first execution (via Docker Desktop's built-in M
 
 ## 🏗️ Architecture & Core Components
 
-1. **Parser Service:** Safely reads legacy files and extracts dependency relationships (`EXECUTES`, `USES_COPYBOOK`).
+1. **Parser Service:** Recursively reads JCL, COBOL source (including files under `utils/`), and copybooks. It extracts ordered JCL execution (`EXECUTES`), scheduler dependencies (`DEPENDS_ON`), static COBOL calls (`CALLS`), and copybook usage (`USES_COPYBOOK`).
 2. **Neo4j Storage:** Persists nodes and relationships while computing vector embeddings over business logic.
 3. **Hybrid Search:** Combines semantic vector similarity search with index-free graph traversal.
 4. **LLM Synthesis:** Feeds enriched multi-hop context into local or cloud models to produce actionable modernization documentation.
@@ -37,9 +37,9 @@ The pipeline operates in two distinct phases: **Ingestion & Indexing** (building
 ```
 
 ### Phase 1: Ingestion & Knowledge Graph Construction
-1. **Parsing:** The `CobolParserService` scans local directories (`./cobol_source/`) to parse JCL jobs, COBOL programs, and shared copybooks.
+1. **Parsing:** The `CobolParserService` scans `./cobol_source/` recursively. JCL becomes `:Job` nodes, `.cbl` files (including shared utilities) become `:Program` nodes, and `.cpy` files become `:Copybook` nodes. Stored-procedure `.sql` files are included in the generated sample workspace but are not currently parsed or ingested.
 2. **Embedding Generation:** Business logic text blocks are sent to the local embedding model (`ai/embeddinggemma:latest`) hosted via Docker Desktop Model Runner (`http://localhost:12434/engines/v1`) to generate 768-dimensional vector embeddings.
-3. **Neo4j Persistence:** Nodes (`:Job`, `:Program`, `:Copybook`) and their interdependencies (`EXECUTES`, `USES_COPYBOOK`) are saved to Neo4j, alongside a native vector index (`program_vectors`) configured for 768 dimensions.
+3. **Neo4j Persistence:** Nodes (`:Job`, `:Program`, `:Copybook`) and their interdependencies (`EXECUTES`, `DEPENDS_ON`, `CALLS`, `USES_COPYBOOK`) are saved to Neo4j. `EXECUTES` relationships retain the JCL step name and order; `program_vectors` indexes program embeddings at 768 dimensions.
 
 ---
 
@@ -71,7 +71,7 @@ The pipeline operates in two distinct phases: **Ingestion & Indexing** (building
 ### Phase 2: Querying, Retrieval, and Inference
 1. **Semantic Querying:** When a user inputs a prompt query, it is converted into a 768-dimensional vector using the local embedding model, bypassing fragile keyword or lexical matching.
 2. **Vector Similarity Matching:** Neo4j evaluates vector distances (`vector.similarity_function: 'cosine'`) to instantly return the nearest neighbor program chunks.
-3. **Graph Traversal (Multi-Hop Crawl):** The system crawls outward from the matched program nodes through the Neo4j knowledge graph to capture connected dependencies (such as upstream JCL jobs and downstream copybook data structures).
+3. **Graph Traversal:** Search and capability discovery currently attach matching programs to their executing jobs and used copybooks. The ingested `DEPENDS_ON` and `CALLS` relationships are available for direct graph exploration; they are not yet included in the search and capability-report traversal queries.
 4. **Context Clubbing & Prompt Injection:** The extracted code snippets, business logic descriptions, and graph relationships are merged into a precision-engineered prompt template.
 5. **Local LLM Inference:** The enriched context is sent to the local instruction model (e.g., `hf.co/bartowski/llama-3.2-1b-instruct-gguf`) running inside Docker Desktop Model Runner.
 6. **Artifact Generation:** The model synthesizes the findings into a structured, developer-ready Technical Modernization & Refactoring Blueprint returned directly to the user.
@@ -162,13 +162,16 @@ pip install -r requirements.txt
 ```
 
 ### Step 3: Generate Mock COBOL Workspace
-
-Populate sample JCL jobs, programs (`CUSTUPD0`, `INTRCALC`), and copybooks under `./cobol_source/`:
+Populate 11 sample JCL jobs, 19 COBOL programs (including shared utilities), 12 copybooks, and 9 DB2 stored-procedure SQL files for eight business capabilities (customer accounts, payments, loans, cards, claims, regulatory reporting, customer onboarding, and treasury cash management) under `./cobol_source/`. The seed also reuses audit, date, amount, and record-layout assets across flows. JCL `//* DEPENDS-ON:` comments model scheduler-level job ordering; the parser records those dependencies and the ordered program steps in the graph:
 
 ```bash
-python script/setup_workspace.py
+python scripts/setup_workspace.py
 
 ```
+
+The shared `COMMON_PRECHECK` and `COMMON_RECONCILIATION` jobs are referenced by multiple capability jobs. COBOL programs call common `DATEUTIL`, `AMOUNTUT`, and `AUDITLOG` utility programs, and share copybooks such as `CUSTREC` and `AUDITREC`. The `MONTH_END` job depends on `WEEKLY_BILLING`, while `REGULATORY_REPORTING` depends on payment, card-settlement, and reconciliation jobs.
+
+The seed writes `//* DEPENDS-ON: JOB_NAME` lines as illustrative scheduler metadata. These comments are not native JCL control statements; they are a convention recognized by this project's parser. JCL `EXEC` steps are captured in source order as `EXECUTES` relationships with `step_name` and `step_order` properties. Utilities stored as `.cbl` files are represented as programs, while SQL stored procedures remain files only.
 
 ### Step 4: Run the Pipeline
 
@@ -178,6 +181,21 @@ Execute the main pipeline to parse assets, generate embeddings, build the Neo4j 
 python src/main.py
 
 ```
+
+### Step 5: Discover Business Capabilities in the Notebook
+
+Open [`notebooks/capability_discovery.ipynb`](./notebooks/capability_discovery.ipynb) from the repository root, select the project Python environment, and run the imports/setup cell. Run ingestion first so that the program embeddings and `program_vectors` index exist. Then run each capability input cell followed by its `discover_and_tag` cell. The notebook examples cover:
+
+- Customer Financial Balance Management
+- Customer Payments and Transfers
+- Loan Servicing and Interest Accrual
+- Card Authorization and Settlement
+- Insurance Claims Adjudication
+- Regulatory Reporting and AML Compliance
+- Customer Onboarding and KYC Verification
+- Treasury Cash Position and Forecasting
+
+Each discovery example uses `top_k=2`; adjust this argument in its discovery cell to return more or fewer program matches.
 
 ---
 
@@ -191,6 +209,16 @@ MATCH (n)
 OPTIONAL MATCH (n)-[r]->(m)
 RETURN n, r, m;
 
+```
+
+To inspect scheduler dependencies and ordered JCL steps specifically:
+
+```cypher
+MATCH (job:Job)-[r:DEPENDS_ON|EXECUTES]->(target)
+RETURN job.name AS job, type(r) AS relationship,
+       r.step_order AS step_order, r.step_name AS step_name,
+       target.name AS target
+ORDER BY job, r.step_order;
 ```
 
 
@@ -298,7 +326,7 @@ sequenceDiagram
     Main->>Neo4j: CALL db.index.vector.queryNodes('program_vectors')
     Neo4j-->>Main: Return Nearest Program Neighbors (Semantic Match)
     
-    Main->>Neo4j: Crawl Graph Edges (EXECUTES, USES_COPYBOOK)
+    Main->>Neo4j: Crawl Graph Edges (EXECUTES, DEPENDS_ON, CALLS, USES_COPYBOOK)
     Neo4j-->>Main: Return Enriched Graph Context
     
     Main->>LLM: POST /engines/v1/chat/completions (Context + Prompt Template)
@@ -311,7 +339,7 @@ sequenceDiagram
 
 ### 4. COBOL Knowledge Graph Relationship Model
 
-Represents how business capabilities, technical components, jobs, programs, utilities, stored procedures, and copybooks are modeled as nodes and edges in Neo4j.
+The diagram below is a conceptual target model. The current parser and graph repository ingest `Job`, `Program`, and `Copybook` nodes and the relationships listed in the implementation notes below. In particular, `.cbl` utility modules are `Program` nodes and SQL stored-procedure files are not currently ingested as graph nodes.
 
 ```mermaid
 erDiagram
@@ -325,7 +353,7 @@ erDiagram
 
     JOB {
         string name "JCL Job Name (e.g., WEEKLY_BILLING.jcl)"
-        string step_name "Step Execution ID"
+        string step_name "Step name stored on EXECUTES relationship"
     }
 
     PROGRAM {
@@ -350,11 +378,13 @@ erDiagram
     CAPABILITY ||--o{ SUBCAPABILITY : "DECOMPOSES_INTO"
     SUBCAPABILITY ||--o{ JOB : "AUTOMATED_BY"
     JOB ||--o{ PROGRAM : "EXECUTES"
-    JOB ||--o{ UTILITY : "CALLS_UTILITY"
-    PROGRAM ||--o{ STORED_PROC : "INVOKES"
+    JOB ||--o{ JOB : "DEPENDS_ON"
+    PROGRAM ||--o{ PROGRAM : "CALLS"
     PROGRAM ||--o{ COPYBOOK : "USES_COPYBOOK"
 
 ```
+
+For the currently ingested relationships, `DEPENDS_ON` points from a dependent job to its prerequisite job; `EXECUTES.step_order` and `EXECUTES.step_name` identify each program's position and step label in the JCL source. `CALLS` captures statically named COBOL `CALL 'PROGRAM-ID'` statements.
 
 
 
@@ -363,7 +393,7 @@ We want to bridge the gap between high-level business domains (Business Capabili
 
 ### Rephrased & Enhanced Feature Specification: **Semantic Capability Discovery & Graph Tagging**
 
-* **Objective:** Automatically map high-level enterprise business capabilities (provided via a title and a 4-5 sentence functional summary) down to their exact technical implementation layers within the Neo4j Knowledge Graph.
+* **Objective:** Map a high-level capability name and functional summary to semantically similar COBOL programs, then show their linked JCL jobs and copybooks.
 * **Input Parameters:**
     1. `capability_name`: The high-level business domain name (e.g., *"Customer Financial Ledger Management"*).
     2. `capability_summary`: A 4-5 sentence rich narrative describing the business intent, triggers, data processing rules, and expected outcomes.
@@ -372,8 +402,8 @@ We want to bridge the gap between high-level business domains (Business Capabili
 * **Workflow Stages:**
     1. **Vectorization:** The capability summary is transformed into a 768-dimensional vector embedding using the local embedding model (`ai/embeddinggemma:latest`).
     2. **Semantic Seeding & Similarity Matching:** The system queries the Neo4j vector index (`program_vectors`) to identify the closest matching core COBOL programs and business logic chunks.
-    3. **Multi-Hop Graph Expansion:** The graph engine crawls outward from the matched programs to automatically discover linked upstream JCL jobs, downstream copybooks, databases, and utility modules.
-    4. **Dynamic Ontology Enrichment (Tagging):** The system injects new `:Capability` and `:SubCapability` nodes into Neo4j and establishes explicit relationships (`IMPLEMENTS`, `DECOMPOSES_INTO`, `EXECUTES`, `USES_COPYBOOK`) to visually group the technical assets under the business domain.
+    3. **Graph Context:** The current discovery query retrieves jobs connected through `EXECUTES` and copybooks connected through `USES_COPYBOOK`. It does not yet expand scheduler dependencies or `CALLS` edges.
+    4. **Graph Tagging:** The service creates `:Capability` and `:SubCapability` nodes, connects them with `DECOMPOSES_INTO`, and links each matched program using `IMPLEMENTED_BY`.
 
 ## Business Capability Modernization Report
 To seamlessly tie this new **Capability Discovery** feature into your existing local pipeline, we can extend your architecture to automatically generate a **Business Capability Modernization Report** using the newly tagged graph context.
@@ -398,4 +428,3 @@ python src/capability_discovery.py
 python src/capability_report.py
 
 ```
-
