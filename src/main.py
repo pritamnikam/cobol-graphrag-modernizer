@@ -1,5 +1,4 @@
-# src/main.py
-# The orchestration entry point that wires all the modules together with Docker/OpenAI switching.
+"""Compose the ingestion and hybrid-search workflow into one runnable pipeline."""
 
 import logging
 import os
@@ -19,6 +18,8 @@ logger = logging.getLogger("MainPipeline")
 
 
 class Settings(BaseSettings):
+  """Load environment-backed settings and select model names for one provider."""
+
   model_config = ConfigDict(env_file=".env", extra="ignore")
 
   # --- Neo4j Configuration ---
@@ -43,6 +44,7 @@ class Settings(BaseSettings):
   # --- Dynamic Aliases for Downstream Services ---
   @property
   def embedding_model(self) -> str:
+    """Keep embedding calls aligned with the selected model provider."""
     return (
         self.local_embedding_model
         if self.llm_provider.lower() == "docker"
@@ -51,6 +53,7 @@ class Settings(BaseSettings):
 
   @property
   def chat_model(self) -> str:
+    """Keep report generation aligned with the selected model provider."""
     return (
         self.local_chat_model
         if self.llm_provider.lower() == "docker"
@@ -58,13 +61,16 @@ class Settings(BaseSettings):
     )
 
 
+# Resolve configuration once so the client, embedding, and chat selections
+# remain consistent throughout a single pipeline run.
 settings = Settings()
 
 
 if __name__ == "__main__":
   logger.info("Initializing Cobol GraphRAG Modernizer pipeline...")
 
-  # --- CONDITIONAL LOGIC FOR CLIENT & MODEL SELECTION ---
+  # The OpenAI-compatible client works with both providers; only its endpoint
+  # and model identifiers change, keeping downstream services provider-agnostic.
   provider = settings.llm_provider.lower()
 
   if provider == "docker":
@@ -82,22 +88,25 @@ if __name__ == "__main__":
     active_chat_model = settings.openai_chat_model
     active_embedding_model = settings.openai_embedding_model
 
-  # 2. Initialize Neo4j Repository
+  # The repository owns the driver and its schema setup for the whole run.
   graph_repo = Neo4jGraphRepository(
       settings.neo4j_uri, (settings.neo4j_user, settings.neo4j_password)
   )
 
   try:
-    # 3. Parse Workspace
+    # Resolve from the process working directory so the documented CLI command
+    # and generated workspace use the same project-relative location.
     workspace_path = os.path.abspath("./cobol_source")
     parsed_workspace = CobolParserService.parse_workspace(workspace_path)
 
-    # 4. Ingest into Neo4j with embeddings (using active dynamic model)
+    # Persist the graph before search, since vector retrieval requires indexed
+    # program embeddings to exist.
     graph_repo.ingest_graph_data(
         parsed_workspace, openai_client, active_embedding_model
     )
 
-    # 5. Initialize Search Service & Run Analysis Query
+    # Exercise vector retrieval and graph expansion against the newly ingested
+    # assets, then display the synthesized report.
     search_service = HybridSearchService(
         graph_repo.driver, openai_client, settings
     )

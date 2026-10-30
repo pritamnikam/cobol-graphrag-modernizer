@@ -1,8 +1,12 @@
+"""Retrieve graph-grounded COBOL context and synthesize modernization reports."""
+
 import logging
 from openai import OpenAI
 
 logger = logging.getLogger("HybridSearchService")
 
+# Keep the synthesis contract in one template so retrieved context and output
+# requirements stay consistent across calls.
 MODERNIZATION_PROMPT_TEMPLATE = """
 You are a Principal Legacy Systems Architect and Senior Cloud Migration Engineer.
 Analyze the following retrieved COBOL programs, copybooks, and JCL job dependencies from the graph database.
@@ -31,15 +35,18 @@ Your response must follow this exact markdown structure:
 """
 
 class HybridSearchService:
-  """Performs native Neo4j vector search combined with multi-hop graph traversal."""
+  """Combine semantic program matches with connected jobs and copybooks."""
 
   def __init__(self, driver, openai_client: OpenAI, settings):
+    """Reuse the pipeline's database driver, model client, and active settings."""
     self.driver = driver
     self.openai_client = openai_client
     self.settings = settings
 
   def search_and_generate_report(self, user_query: str) -> str:
-    # 1. Embed user query
+    """Retrieve relevant program context and synthesize a modernization plan."""
+    # Query embeddings must use the same model as indexed program embeddings;
+    # otherwise vector dimensions or embedding spaces may not be comparable.
     query_vector = (
         self.openai_client.embeddings.create(
             input=user_query, model=self.settings.embedding_model
@@ -48,7 +55,8 @@ class HybridSearchService:
         .embedding
     )
 
-    # 2. Execute Hybrid Cypher Query
+    # Optional matches retain a program result even when a job or copybook link
+    # is absent, while the collections avoid repeating names in the prompt.
     cypher = """
         CALL db.index.vector.queryNodes('program_vectors', 3, $query_vector)
         YIELD node AS program, score
@@ -77,7 +85,8 @@ class HybridSearchService:
 
     combined_context = "\n".join(context_snippets)
 
-    # 3. Synthesize via LLM
+    # Keep graph retrieval separate from synthesis so the LLM receives concrete
+    # code context instead of having to infer dependencies from the query alone.
     prompt = MODERNIZATION_PROMPT_TEMPLATE.format(context=combined_context)
 
     completion = self.openai_client.chat.completions.create(

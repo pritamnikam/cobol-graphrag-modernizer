@@ -1,7 +1,12 @@
+"""Seed a repeatable, interconnected COBOL/JCL modernization sample workspace."""
+
 import os
 
 
+# A declarative asset manifest keeps the generated sample graph understandable:
+# shared job names, CALL targets, and COPY members deliberately cross domains.
 WORKSPACE_ASSETS = {
+    # Common batch prerequisites are referenced by multiple capability jobs.
     "jcl/WEEKLY_BILLING.jcl": """
         //WEEKLY01 JOB (ACCT100),'WEEKLY BILLING RUN',CLASS=A,MSGCLASS=X
         //* DEPENDS-ON: COMMON_PRECHECK
@@ -88,6 +93,8 @@ WORKSPACE_ASSETS = {
         //FORECAST EXEC PGM=CASHFCST
         //FCSTFILE DD DSN=PROD.TREASURY.FORECAST,DISP=(NEW,CATLG)
         """,
+    # Programs model domain behavior and call shared utility modules to make
+    # cross-capability dependencies visible during parsing and graph traversal.
     "programs/CUSTUPD0.cbl": """
        IDENTIFICATION DIVISION.
        PROGRAM-ID. CUSTUPD0.
@@ -412,6 +419,7 @@ WORKSPACE_ASSETS = {
            MOVE WS-NET-FLOW TO CASH-FORECAST
            STOP RUN.
        """,
+    # Shared copybooks make record-layout reuse explicit across programs.
     "copybooks/CUSTREC.cpy": """
        01 CUSTOMER-RECORD.
           05 CUST-ID PIC X(08).
@@ -492,6 +500,8 @@ WORKSPACE_ASSETS = {
           05 CASH-SCHEDULED-PAYMENTS PIC 9(11)V99.
           05 CASH-FORECAST PIC 9(11)V99.
        """,
+    # Utility programs are stored as COBOL so the existing parser indexes them
+    # as Program nodes and can resolve static CALL relationships to them.
     "utils/DATEUTIL.cbl": """
        IDENTIFICATION DIVISION.
        PROGRAM-ID. DATEUTIL.
@@ -530,6 +540,8 @@ WORKSPACE_ASSETS = {
           DISPLAY 'AUDIT EVENT RECORDED'
           GOBACK.
        """,
+    # SQL procedures illustrate database-side business operations; the current
+    # parser does not ingest .sql files, so they remain source examples only.
     "stored_procs/SP_ACCRUE_ACCOUNT_INTEREST.sql": """
         CREATE PROCEDURE SP_ACCRUE_ACCOUNT_INTEREST (
             IN P_ACCOUNT_ID CHAR(10),
@@ -658,10 +670,17 @@ WORKSPACE_ASSETS = {
 
 
 def create_mock_cobol_workspace(base_path="./cobol_source"):
+  """Write each manifest asset, creating its parent folders as needed.
+
+  Existing files with the same manifest paths are replaced so rerunning setup
+  restores a consistent sample without deleting unrelated workspace files.
+  """
   for relative_path, content in WORKSPACE_ASSETS.items():
     file_path = os.path.join(base_path, relative_path)
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
     with open(file_path, "w", encoding="utf-8") as file:
+      # Remove only the indentation before each embedded asset's first line;
+      # the source text itself remains easy to read in this Python manifest.
       file.write(content.lstrip())
 
   print(
@@ -672,4 +691,5 @@ def create_mock_cobol_workspace(base_path="./cobol_source"):
 
 
 if __name__ == "__main__":
+  # Running the script directly populates the documented default workspace.
   create_mock_cobol_workspace()

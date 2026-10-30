@@ -1,3 +1,5 @@
+"""Parse JCL, COBOL programs, copybooks, and their graph dependencies."""
+
 import logging
 import os
 import re
@@ -7,11 +9,20 @@ logger = logging.getLogger("CobolParserService")
 
 
 class CobolParserService:
-  """Parses legacy COBOL, JCL, and Copybook files safely with error handling."""
+  """Extract graph-ready assets and dependencies from a COBOL workspace."""
 
   @staticmethod
   def parse_workspace(base_path: str) -> Dict[str, List[Dict[str, Any]]]:
+    """Read supported assets and return nodes plus typed graph relationships.
+
+    The result keeps each asset category separate so the graph repository can
+    create all nodes before it attempts to connect them.
+    Individual unreadable files are logged and skipped so one malformed asset
+    does not prevent the rest of the workspace from being analyzed.
+    """
     parsed_data = {
+        # Keep the shape stable even for an empty or partially unreadable input
+        # directory, allowing ingestion callers to process every category.
         "jobs": [],
         "programs": [],
         "copybooks": [],
@@ -31,6 +42,8 @@ class CobolParserService:
 
           if file.endswith(".jcl"):
             job_name = file.split(".")[0]
+            # Preserve source order because JCL step position is meaningful to
+            # batch execution and is stored on each EXECUTES relationship.
             steps = re.findall(
                 r"^\s*//([A-Z0-9@$#]+)\s+EXEC\s+PGM=([A-Z0-9]+)",
                 content,
@@ -53,6 +66,8 @@ class CobolParserService:
                   "step_name": step_name,
               })
 
+            # DEPENDS-ON is a seed-workspace convention for scheduler
+            # prerequisites, not a native JCL control statement.
             dependencies = re.findall(
                 r"^\s*//\*\s*DEPENDS-ON:\s*([A-Z0-9_]+)",
                 content,
@@ -81,6 +96,8 @@ class CobolParserService:
                 else "Core enterprise processing unit."
             )
 
+            # Remarks provide compact semantic text for embeddings without
+            # requiring the search layer to embed the entire source listing.
             parsed_data["programs"].append({
                 "name": prog_name,
                 "code": content,
@@ -95,6 +112,8 @@ class CobolParserService:
                   "rel": "USES_COPYBOOK",
               })
 
+            # Only statically named CALLs can be resolved by this simple parser;
+            # dynamic COBOL call targets need runtime or compiler analysis.
             called_programs = re.findall(
                 r"\bCALL\s+['\"]([A-Z0-9-]+)['\"]",
                 content,

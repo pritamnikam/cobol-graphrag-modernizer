@@ -1,3 +1,5 @@
+"""Provide a text menu for the project's ingestion and analysis workflows."""
+
 import os
 import sys
 from dotenv import load_dotenv
@@ -9,6 +11,7 @@ load_dotenv()
 
 
 def print_banner():
+  """Identify the tool and local-first execution mode in the interactive menu."""
   print("=" * 65)
   print("         COBOL GRAPHRAG MODERNIZER - INTERACTIVE CLI")
   print("         Privacy-First Local Pipeline via Docker Models")
@@ -16,6 +19,7 @@ def print_banner():
 
 
 def run_ingestion_pipeline():
+  """Run the menu's ingestion action and display setup guidance on failure."""
   print(
       "\n🚀 [1] Running Full Ingestion, Vector Indexing & Modernization Report..."
   )
@@ -41,6 +45,7 @@ def run_ingestion_pipeline():
 
 
 def run_semantic_search():
+  """Run the standalone vector-search smoke test from the menu."""
   print("\n🔍 [2] Running Semantic Vector Search Test...")
   try:
     from test_search import run_search
@@ -53,6 +58,7 @@ def run_semantic_search():
 
 
 def run_capability_discovery():
+  """Discover and tag the sample customer-finance capability."""
   print("\n🏷️ [3] Running Semantic Capability Discovery & Tagging...")
   try:
     from capability_discovery import CapabilityDiscoveryService
@@ -74,6 +80,7 @@ def run_capability_discovery():
 
 
 def run_capability_report():
+  """Generate the report for the sample capability tagged by discovery."""
   print("\n📊 [4] Generating Capability Modernization Report...")
   try:
     from capability_report import CapabilityReportGenerator
@@ -85,6 +92,7 @@ def run_capability_report():
 
 
 def main_menu():
+  """Keep the CLI available for repeated operations until the user exits."""
   while True:
     print_banner()
     print("Please select an option:")
@@ -97,6 +105,8 @@ def main_menu():
 
     choice = input("Enter your choice (1-5): ").strip()
 
+    # Dispatch one operation per selection; the final prompt gives the user
+    # control over when the menu is redrawn.
     if choice == "1":
       run_ingestion_pipeline()
     elif choice == "2":
@@ -115,4 +125,5 @@ def main_menu():
 
 
 if __name__ == "__main__":
+  # Avoid starting interactive input when this module is imported elsewhere.
   main_menu()

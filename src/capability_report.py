@@ -1,3 +1,5 @@
+"""Generate a modernization report from capability-tagged graph context."""
+
 import os
 from dotenv import load_dotenv
 from neo4j import GraphDatabase
@@ -6,8 +8,10 @@ from openai import OpenAI
 load_dotenv()
 
 class CapabilityReportGenerator:
+  """Fetch assets tagged to a capability and ask an LLM for a blueprint."""
 
   def __init__(self):
+    """Configure the chat client and Neo4j connection from environment values."""
     self.openai_client = OpenAI(
         base_url=os.getenv(
             "LOCAL_AI_BASE_URL", "http://localhost:12434/engines/v1"
@@ -23,11 +27,13 @@ class CapabilityReportGenerator:
     self.neo4j_password = os.getenv("NEO4J_PASSWORD", "password")
 
   def generate_report(self, capability_name: str):
+    """Assemble graph context and print a capability-specific report."""
     print(
         f"\n📊 Fetching graph context for capability: '{capability_name}'..."
     )
 
-    # Fetch all connected nodes for this capability from Neo4j
+    # Follow the tagging edges created by capability discovery, then add direct
+    # job and copybook links to ground the report in implementation assets.
     cypher_query = """
         MATCH (cap:Capability {name: $cap_name})-[:DECOMPOSES_INTO]->(sub:SubCapability)-[:IMPLEMENTED_BY]->(prog:Program)
         OPTIONAL MATCH (job:Job)-[:EXECUTES]->(prog)
@@ -41,6 +47,8 @@ class CapabilityReportGenerator:
             collect(DISTINCT cb.name) AS Copybooks
         """
 
+    # Accumulate context before calling the model so a missing capability can
+    # be reported without making an empty or misleading LLM request.
     context_str = ""
     with GraphDatabase.driver(
         self.neo4j_uri, auth=(self.neo4j_user, self.neo4j_password)
@@ -62,6 +70,8 @@ class CapabilityReportGenerator:
 
     print("Synthesizing Capability Modernization Report via Local LLM...")
 
+    # Pass only the selected capability's retrieved neighborhood to keep the
+    # generated design focused on its actual legacy implementation.
     prompt = f"""
     You are a Principal Enterprise Cloud Architect. Analyze the following graph context for the business capability: '{capability_name}'.
 
@@ -96,5 +106,6 @@ class CapabilityReportGenerator:
 
 
 if __name__ == "__main__":
+  # Keep a runnable example aligned with the capability used by the notebook.
   generator = CapabilityReportGenerator()
   generator.generate_report("Customer Financial Balance Management")

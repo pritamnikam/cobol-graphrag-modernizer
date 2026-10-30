@@ -1,3 +1,5 @@
+"""Smoke-test embedding generation and Neo4j vector retrieval."""
+
 import os
 from dotenv import load_dotenv
 from neo4j import GraphDatabase
@@ -5,7 +7,8 @@ from openai import OpenAI
 
 load_dotenv()
 
-# Initialize OpenAI client pointing to Docker Model Runner
+# Use the OpenAI-compatible Model Runner endpoint to share the local model
+# configuration used by ingestion.
 openai_client = OpenAI(
     base_url=os.getenv("LOCAL_AI_BASE_URL", "http://localhost:12434/engines/v1"),
     api_key=os.getenv("LOCAL_AI_API_KEY", "not-needed"),
@@ -17,7 +20,8 @@ NEO4J_URI = os.getenv("NEO4J_URI", "bolt://127.0.0.1:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
 
-# Sample query text
+# A representative natural-language query exercises semantic rather than
+# exact-name matching.
 query_text = (
     "Find COBOL code handling customer account balance calculation or interest"
 )
@@ -35,7 +39,8 @@ RETURN node.name AS name, node.business_logic AS logic, score
 """
 
 print("\n--- Semantic Search Results ---")
-# Using driver as a context manager ensures clean disposal before script exit
+# The driver context manager closes the connection even if result formatting
+# fails, which keeps this standalone smoke test safe to rerun.
 with GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD)) as driver:
   with driver.session() as session:
     result = session.run(cypher_query, {"k": 3, "embedding": query_vector})

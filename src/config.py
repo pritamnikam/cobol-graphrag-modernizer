@@ -1,3 +1,5 @@
+"""Initialize LangChain model clients from independent provider settings."""
+
 import os
 from dotenv import load
 
@@ -6,6 +8,8 @@ load()
 llm_provider = os.getenv("LLM_PROVIDER", "docker").lower()
 embedding_provider = os.getenv("EMBEDDING_PROVIDER", "docker").lower()
 
+# Chat and embedding providers are selected independently so deployments can,
+# for example, keep embeddings local while using a hosted chat model.
 # --- LLM Initialization ---
 if llm_provider == "docker":
     from langchain_openai import ChatOpenAI
@@ -33,7 +37,8 @@ if embedding_provider == "docker":
         base_url=os.getenv("LOCAL_AI_BASE_URL", "http://localhost:11434/v1"),
         api_key=os.getenv("LOCAL_AI_API_KEY", "not-needed"),
         model=os.getenv("LOCAL_EMBEDDING_MODEL", "ai/embeddinggemma:latest"),
-        # Note: Some local embedding endpoints require disabling check for dimensions
+        # Some local OpenAI-compatible endpoints omit token-count metadata, so
+        # disable LangChain's context-length preflight for this provider.
         check_embedding_ctx_length=False,
     )
 else:
@@ -43,3 +48,6 @@ else:
         api_key=os.getenv("OPENAI_API_KEY"),
         model=os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
     )
+
+# Export initialized clients for callers that need consistent model selection
+# without rebuilding provider configuration in each module.

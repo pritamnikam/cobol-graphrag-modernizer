@@ -1,3 +1,5 @@
+"""Persist parsed COBOL workspace assets and semantic embeddings to Neo4j."""
+
 import logging
 from typing import Any, Dict, List
 from neo4j import GraphDatabase
@@ -7,17 +9,19 @@ logger = logging.getLogger("Neo4jGraphRepository")
 
 
 class Neo4jGraphRepository:
-  """Handles database connectivity, schema constraints, and batch data loading."""
+  """Persist parsed assets and their relationships to Neo4j."""
 
   def __init__(self, uri: str, auth: tuple):
+    """Open a driver and ensure node-name constraints exist before ingestion."""
     self.driver = GraphDatabase.driver(uri, auth=auth)
     self._initialize_schema()
 
   def close(self):
+    """Release the Neo4j driver after the pipeline finishes."""
     self.driver.close()
 
   def _initialize_schema(self):
-    """Sets unique constraints."""
+    """Prevent duplicate asset nodes when workspaces are ingested repeatedly."""
     queries = [
         "CREATE CONSTRAINT IF NOT EXISTS FOR (j:Job) REQUIRE j.name IS UNIQUE",
         "CREATE CONSTRAINT IF NOT EXISTS FOR (p:Program) REQUIRE p.name IS UNIQUE",
@@ -34,7 +38,7 @@ class Neo4jGraphRepository:
       openai_client: OpenAI,
       embedding_model: str,
   ):
-    """Batches data ingestion and computes vector embeddings for programs."""
+    """Merge parsed assets, embed program summaries, and create graph edges."""
     with self.driver.session() as session:
       # Ingest Jobs
       for job in data["jobs"]:
@@ -50,6 +54,8 @@ class Neo4jGraphRepository:
 
       # Ingest Programs & Compute Embeddings
       for prog in data["programs"]:
+        # Embed extracted business summaries rather than full source code so
+        # vector matches focus on behavior and stay compact.
         response = openai_client.embeddings.create(
             input=prog["business_logic"], model=embedding_model
         )
@@ -79,6 +85,8 @@ class Neo4jGraphRepository:
 
       # Ingest Relationships
       for rel in data["relations"]:
+        # Cypher parameters cannot represent relationship types, so interpolate
+        # only the parser's fixed type vocabulary; keep all property values bound.
         cypher = f"""
                 MATCH (a {{name: $from_name}})
                 MATCH (b {{name: $to_name}})
@@ -100,6 +108,7 @@ class Neo4jGraphRepository:
     logger.info("Graph ingestion and vector indexing completed successfully.")
 
   def _create_vector_index(self):
+    """Create the cosine index used by semantic search and discovery."""
     query = """
         CREATE VECTOR INDEX program_vectors IF NOT EXISTS
         FOR (p:Program) 

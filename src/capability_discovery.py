@@ -1,3 +1,5 @@
+"""Map business capability descriptions to semantically relevant COBOL assets."""
+
 import os
 from dotenv import load_dotenv
 from neo4j import GraphDatabase
@@ -7,8 +9,10 @@ load_dotenv()
 
 
 class CapabilityDiscoveryService:
+  """Embed capability summaries and tag matching programs in Neo4j."""
 
   def __init__(self):
+    """Create the local embedding client and read graph connection settings."""
     self.openai_client = OpenAI(
         base_url=os.getenv(
             "LOCAL_AI_BASE_URL", "http://localhost:12434/engines/v1"
@@ -26,9 +30,11 @@ class CapabilityDiscoveryService:
   def discover_and_tag(
       self, capability_name: str, capability_summary: str, top_k: int = 3
   ):
+    """Find the nearest programs and attach them to a capability sub-node."""
     print(f"\n🔍 Analyzing Capability: '{capability_name}'...")
 
-    # 1. Generate embedding for the capability summary
+    # Use the same embedding model configured for program ingestion so both
+    # vectors are comparable in the program_vectors index.
     print("Generating semantic embedding for summary...")
     response = self.openai_client.embeddings.create(
         input=capability_summary, model=self.embedding_model
@@ -39,7 +45,8 @@ class CapabilityDiscoveryService:
         f" {len(capability_vector)}"
     )
 
-    # 2. Connect to Neo4j and execute semantic match + graph traversal tagging
+    # Match programs first, then attach job and copybook context for an
+    # explainable result alongside each semantic score.
     cypher_query = """
         // Step A: Find nearest program matches using vector index
         CALL db.index.vector.queryNodes('program_vectors', $k, $embedding)
@@ -67,6 +74,8 @@ class CapabilityDiscoveryService:
             collect(DISTINCT copybook.name) AS LinkedCopybooks
     """
 
+    # Reuse one stable sub-capability for repeated discovery of this business
+    # capability instead of creating a new node per run.
     sub_name = f"{capability_name} - Core Execution Flow"
 
     print("Executing Neo4j graph traversal and tagging...")
@@ -100,7 +109,7 @@ class CapabilityDiscoveryService:
 
 
 if __name__ == "__main__":
-  # Example execution input
+  # This example makes the module directly runnable without a notebook.
   sample_cap_name = "Customer Financial Balance Management"
   sample_cap_summary = (
       "This business capability manages customer accounts, evaluates yearly"
