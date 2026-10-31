@@ -5,6 +5,8 @@ import os
 from graph_repo import Neo4jGraphRepository
 from openai import OpenAI
 from parser import CobolParserService
+from capability_catalog import seed_capability_catalog
+from capability_discovery import CapabilityDiscoveryService
 from pydantic_settings import BaseSettings
 from search_service import HybridSearchService
 from pydantic import ConfigDict
@@ -104,6 +106,27 @@ if __name__ == "__main__":
     graph_repo.ingest_graph_data(
         parsed_workspace, openai_client, active_embedding_model
     )
+
+    # Seed searchable capability nodes against the just-indexed program graph
+    # before running tri-hybrid discovery over the catalog.
+    capability_service = CapabilityDiscoveryService(
+        openai_client=openai_client,
+        embedding_model=active_embedding_model,
+        neo4j_uri=settings.neo4j_uri,
+        neo4j_user=settings.neo4j_user,
+        neo4j_password=settings.neo4j_password,
+    )
+    seed_capability_catalog(capability_service)
+    capability_matches = capability_service.discover_capabilities(
+        "How are customer balances evaluated and updated?", top_k=5
+    )
+    print("\n================ TRI-HYBRID CAPABILITY MATCHES ================")
+    for rank, match in enumerate(capability_matches, start=1):
+      print(
+          f"{rank}. {match['name']} "
+          f"(RRF {match['rrf_score']:.4f}; "
+          f"signals: {', '.join(match['matched_by'])})"
+      )
 
     # Exercise vector retrieval and graph expansion against the newly ingested
     # assets, then display the synthesized report.

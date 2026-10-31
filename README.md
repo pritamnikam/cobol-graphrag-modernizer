@@ -9,37 +9,57 @@ Supports **both** local privacy-first execution (via Docker Desktop's built-in M
 ## 🏗️ Architecture & Core Components
 
 1. **Parser Service:** Recursively reads JCL, COBOL source (including files under `utils/`), and copybooks. It extracts ordered JCL execution (`EXECUTES`), scheduler dependencies (`DEPENDS_ON`), static COBOL calls (`CALLS`), and copybook usage (`USES_COPYBOOK`).
-2. **Neo4j Storage:** Persists nodes and relationships while computing vector embeddings over business logic.
-3. **Hybrid Search:** Combines semantic vector similarity search with index-free graph traversal.
-4. **LLM Synthesis:** Feeds enriched multi-hop context into local or cloud models to produce actionable modernization documentation.
+2. **Neo4j Storage:** Persists technical assets, capability summaries, and their relationships.
+3. **Tri-hybrid Capability Discovery:** Combines BM25 full-text retrieval, capability-summary vector search, and implementation-graph heuristics with reciprocal rank fusion (RRF).
+4. **Hybrid Search & LLM Synthesis:** Retrieves graph context for modernization reports using local or cloud models.
 
 ---
 
 ## 🔄 Life of a Request
 
-The pipeline operates in two distinct phases: **Ingestion & Indexing** (building the intelligence layer) and **Hybrid Retrieval & Synthesis** (executing user queries).
+The pipeline builds a searchable graph, then combines lexical, semantic, and structural signals to rank capabilities before generating a modernization report.
 
 
 ```
 
 [Legacy Source Files (.cbl, .cpy, .jcl)]
-│
-▼  (Phase 1: Ingestion & Vectorization)
+        │
+        ▼
+(Phase 1: Ingestion & Vectorization)
 [CobolParserService] ──► Extracts Graph Nodes & Business Logic
-│
-├─────────────────────────────────┐
-▼                                 ▼
-[Docker Model Runner]             [Neo4j Database]
-(embeddinggemma)             Persists Nodes & Relationships
-│                                 │
-└────────► [Native Vector Index (`program_vectors`)] ◄──┘
+        │
+        ├─────────────────────────────────┐
+        ▼                                 ▼
+[Configured Embedding Provider]    [Neo4j Database]
+                                   Persists Nodes & Relationships
+        │                                  │
+        └────────► [Program & Capability Vector Indexes] ◄──────┘
 
 ```
 
+### Tri-hybrid capability ranking
+
+```text
+[Capability query]
+     ├──► BM25 full-text index ─────┐
+     ├──► Capability vector index ──┼──► Reciprocal Rank Fusion
+     └──► Implementation graph ─────┘          │
+                                               ▼
+                         Ranked capabilities with evidence details
+```
+
+The lexical and semantic channels independently retrieve capability nodes by
+name and summary. The graph heuristic ranks capabilities with implementing
+programs, their executing jobs, and used copybooks. RRF combines ranks rather
+than comparing BM25 and cosine scores on different scales. Capabilities
+explicitly marked `DEPRECATED` are excluded; a missing status is treated as
+active.
+
 ### Phase 1: Ingestion & Knowledge Graph Construction
 1. **Parsing:** The `CobolParserService` scans `./cobol_source/` recursively. JCL becomes `:Job` nodes, `.cbl` files (including shared utilities) become `:Program` nodes, and `.cpy` files become `:Copybook` nodes. Stored-procedure `.sql` files are included in the generated sample workspace but are not currently parsed or ingested.
-2. **Embedding Generation:** Business logic text blocks are sent to the local embedding model (`ai/embeddinggemma:latest`) hosted via Docker Desktop Model Runner (`http://localhost:12434/engines/v1`) to generate 768-dimensional vector embeddings.
-3. **Neo4j Persistence:** Nodes (`:Job`, `:Program`, `:Copybook`) and their interdependencies (`EXECUTES`, `DEPENDS_ON`, `CALLS`, `USES_COPYBOOK`) are saved to Neo4j. `EXECUTES` relationships retain the JCL step name and order; `program_vectors` indexes program embeddings at 768 dimensions.
+2. **Embedding Generation:** Program and capability summaries are embedded using the configured provider. Vector index dimensions follow the generated embeddings.
+3. **Neo4j Persistence:** Nodes (`:Job`, `:Program`, `:Copybook`) and their interdependencies (`EXECUTES`, `DEPENDS_ON`, `CALLS`, `USES_COPYBOOK`) are saved to Neo4j. `EXECUTES` relationships retain JCL step names and order. Capability nodes store their summary and embedding for tri-hybrid discovery.
+4. **Search Indexes:** `program_vectors` indexes program embeddings, `capability_vectors` indexes capability summaries, and `capability_text_index` indexes capability names and summaries for BM25 retrieval.
 
 ---
 
@@ -47,40 +67,41 @@ The pipeline operates in two distinct phases: **Ingestion & Indexing** (building
 ```
 
 [User Natural Language Query]
-│
-▼  (Phase 2: Hybrid Retrieval & LLM Synthesis)
-[Docker Model Runner Embeddings] ──► Generates Query Vector (768-dim)
-│
-▼
+                │
+                ▼
+     (Phase 2: Hybrid Retrieval & LLM Synthesis)
+[Configured Embedding Provider] ──► Generates Query Vector
+                │
+                ▼
 [Neo4j Vector Search] ──► Retrieves Nearest Neighbors (Semantic Match)
-│
-▼
+                │
+                ▼
 [Graph Traversal] ──► Crawls Connected Edges (JCL Jobs & Copybooks)
-│
-▼
+                │
+                ▼
 [Context Assembly & Prompt Injection]
-│
-▼
+                │
+                ▼
 [Local LLM (Llama 3.2 1B / SmolLM2)] ──► Inference on Docker Model Runner
-│
-▼
+                │
+                ▼
 [Structured Modernization Blueprint Delivered to User]
 
 ```
 
 ### Phase 2: Querying, Retrieval, and Inference
-1. **Semantic Querying:** When a user inputs a prompt query, it is converted into a 768-dimensional vector using the local embedding model, bypassing fragile keyword or lexical matching.
-2. **Vector Similarity Matching:** Neo4j evaluates vector distances (`vector.similarity_function: 'cosine'`) to instantly return the nearest neighbor program chunks.
-3. **Graph Traversal:** Search and capability discovery currently attach matching programs to their executing jobs and used copybooks. The ingested `DEPENDS_ON` and `CALLS` relationships are available for direct graph exploration; they are not yet included in the search and capability-report traversal queries.
-4. **Context Clubbing & Prompt Injection:** The extracted code snippets, business logic descriptions, and graph relationships are merged into a precision-engineered prompt template.
-5. **Local LLM Inference:** The enriched context is sent to the local instruction model (e.g., `hf.co/bartowski/llama-3.2-1b-instruct-gguf`) running inside Docker Desktop Model Runner.
-6. **Artifact Generation:** The model synthesizes the findings into a structured, developer-ready Technical Modernization & Refactoring Blueprint returned directly to the user.
+1. **Lexical Retrieval:** BM25 full-text search finds capabilities whose names or summaries contain query terms and identifiers.
+2. **Semantic Retrieval:** The query is embedded and compared against capability-summary vectors with cosine similarity.
+3. **Graph Heuristic:** Implemented program, executing-job, and copybook counts rank structurally supported capabilities; capabilities without implementing programs and explicitly deprecated capabilities are filtered out.
+4. **Rank Fusion:** Reciprocal Rank Fusion combines the three independently ranked lists, avoiding direct arithmetic between raw scores on different scales.
+5. **Context Retrieval & Synthesis:** The existing modernization search retrieves matching program code, business logic, jobs, and copybooks, then sends that context to the configured chat model for a report.
 
 ---
 
 ## 📋 Prerequisites
 
 * **Python 3.10+**
+* **Neo4j 5.15+** (full-text and vector indexes enabled)
 * **Docker Desktop** (with Model Runner enabled for local models, or a running Neo4j instance)
 
 ---
@@ -175,7 +196,7 @@ The seed writes `//* DEPENDS-ON: JOB_NAME` lines as illustrative scheduler metad
 
 ### Step 4: Run the Pipeline
 
-Execute the main pipeline to parse assets, generate embeddings, build the Neo4j graph with native vector indexing, and output the modernization report:
+Execute the main pipeline to parse assets, generate embeddings, seed the eight sample capabilities, run tri-hybrid ranking, and generate a modernization report:
 
 ```bash
 python src/main.py
@@ -184,7 +205,7 @@ python src/main.py
 
 ### Step 5: Discover Business Capabilities in the Notebook
 
-Open [`notebooks/capability_discovery.ipynb`](./notebooks/capability_discovery.ipynb) from the repository root, select the project Python environment, and run the imports/setup cell. Run ingestion first so that the program embeddings and `program_vectors` index exist. Then run each capability input cell followed by its `discover_and_tag` cell. The notebook examples cover:
+Open [`notebooks/capability_discovery.ipynb`](./notebooks/capability_discovery.ipynb) from the repository root, select the project Python environment, and run the imports/setup cell. Run ingestion first so that the program embeddings and `program_vectors` index exist. Run each capability input cell followed by its `discover_and_tag` cell to populate the capability catalog, then run the tri-hybrid query cell to rank existing capabilities. The notebook examples cover:
 
 - Customer Financial Balance Management
 - Customer Payments and Transfers
@@ -196,6 +217,22 @@ Open [`notebooks/capability_discovery.ipynb`](./notebooks/capability_discovery.i
 - Treasury Cash Position and Forecasting
 
 Each discovery example uses `top_k=2`; adjust this argument in its discovery cell to return more or fewer program matches.
+
+For an interactive terminal workflow that seeds the catalog and asks for a search query, run:
+
+```bash
+python scripts/discover_capabilities.py
+```
+
+The CLI also exposes this workflow as **Tri-hybrid Capability Discovery**. `top_k`, `candidate_k`, and the RRF constant (`rrf_k`, default `60`) can be adjusted when calling `discover_capabilities`.
+
+### Run the unit tests
+
+The tri-hybrid ranking and query orchestration tests use mocked embedding and Neo4j clients:
+
+```bash
+python -m unittest discover -s tests -v
+```
 
 ---
 
@@ -252,7 +289,7 @@ title System Context Diagram - Cobol GraphRAG Modernizer
 Person(user, "Legacy Developer / Architect", "Initiates modernization pipelines and queries.")
 System_Boundary(localEnv, "Local Host Environment (Privacy-First)") {
     System(app, "Cobol GraphRAG Modernizer", "Orchestrates parsing, vector indexing, graph traversal, and prompt synthesis.")
-    SystemDb(neo4j, "Neo4j Database", "Stores knowledge graph nodes, relationships, and native 768-dim vector indexes.")
+    SystemDb(neo4j, "Neo4j Database", "Stores knowledge graph nodes, relationships, full-text index, and program/capability vector indexes.")
     System_Ext(dockerModel, "Docker Desktop Model Runner", "Hosts local AI models (embeddinggemma & llama-3.2/smollm2) via Port 12434.")
 }
 
@@ -264,30 +301,36 @@ Rel(app, neo4j, "Reads/Writes graph & queries vectors", "Bolt Protocol (7687)")
 
 ---
 
-### 2. End-to-End Pipeline Flow Diagram (Life of a Request)
-
-Covers both Phase 1 (Ingestion & Vectorization) and Phase 2 (Hybrid Retrieval & Synthesis).
+### 2. End-to-End Pipeline Flow Diagram
 
 ```mermaid
 flowchart TD
     subgraph Phase1 ["Phase 1: Ingestion & Knowledge Graph Construction"]
         A[Legacy Source Files\n.cbl, .cpy, .jcl] -->|Scan & Parse| B(CobolParserService)
-        B -->|Extract Business Logic & Metadata| C[Docker Model Runner\nembeddinggemma:latest]
-        C -->|Generate 768-dim Vectors| D[(Neo4j Database)]
+        B -->|Extract Business Logic & Metadata| C[Configured Embedding Provider]
+        C -->|Generate model-dimension Vectors| D[(Neo4j Database)]
         B -->|Persist Nodes & Relationships| D
-        D -->|Build Native Index| E[Vector Index: program_vectors]
+        D -->|Index Programs| E[program_vectors]
+        D -->|Tag Capabilities| F[Capability Nodes]
+        F --> G[Capability Full-text & Vector Indexes]
     end
 
-    subgraph Phase2 ["Phase 2: Hybrid Retrieval & LLM Synthesis"]
-        U[User Natural Language Query] -->|Generate Query Vector| F[Docker Model Runner\nembeddinggemma:latest]
-        F -->|768-dim Query Vector| G[Neo4j Vector Search]
-        G -->|Nearest Neighbors Match| H[Graph Traversal\nMulti-Hop Crawl]
-        H -->|Extract Connected Jobs, Programs, Copybooks| I[Context Assembly & Prompt Injection]
-        I -->|Enriched Context + Template| J[Local LLM\nllama-3.2-1b-instruct]
+    subgraph Phase2 ["Phase 2: Tri-hybrid Capability Ranking"]
+        U[User Capability Query] --> L[BM25 Full-text Search]
+        U -->|Generate Query Vector| Q[Configured Embedding Provider]
+        Q --> V[Capability Vector Search]
+        U --> H[Implementation Graph Heuristic]
+        L --> R[Reciprocal Rank Fusion]
+        V --> R
+        H --> R
+        R --> Z[Filtered, Ranked Capabilities]
+    end
+
+    subgraph Phase3 ["Phase 3: Modernization Report"]
+        Z -->|Select related programs and assets| I[Context Assembly]
+        I -->|Enriched Context + Template| J[Configured Chat Model]
         J -->|Inference & Formatting| K[Structured Technical\nModernization Blueprint]
     end
-
-    E -.->|Semantic Distance Match| G
 
 ```
 
@@ -295,7 +338,7 @@ flowchart TD
 
 ### 3. Sequence Diagram (Request & Inference Execution)
 
-Illustrates the chronological interaction between the pipeline services, Docker Model Runner, and Neo4j.
+Illustrates ingestion, capability catalog seeding, tri-hybrid ranking, and report generation.
 
 ```mermaid
 sequenceDiagram
@@ -303,28 +346,35 @@ sequenceDiagram
     actor User
     participant Main as MainPipeline
     participant Parser as CobolParserService
-    participant Docker as Docker Model Runner
+    participant Embed as Configured Embedding Provider
     participant Neo4j as Neo4j Graph DB
-    participant LLM as Local LLM (Llama 3.2)
+    participant LLM as Configured Chat Model
 
     User->>Main: python src/main.py
     Main->>Parser: Scan ./cobol_source/ directory
     Parser->>Parser: Extract JCL Jobs, Programs, Copybooks
     
     loop For each code chunk
-        Parser->>Docker: POST /engines/v1/embeddings (business logic)
-        Docker-->>Parser: Returns 768-dim vector
+        Parser->>Embed: Create program embedding
+        Embed-->>Parser: Return model-dimension vector
     end
 
     Parser->>Neo4j: Persist nodes, relationships & index program_vectors
-    
-    Note over User, LLM: Query & Synthesis Phase
-    User->>Main: Send Natural Language Modernization Query
-    Main->>Docker: POST /engines/v1/embeddings (Query Text)
-    Docker-->>Main: Return Query Vector
-    
-    Main->>Neo4j: CALL db.index.vector.queryNodes('program_vectors')
-    Neo4j-->>Main: Return Nearest Program Neighbors (Semantic Match)
+
+    loop For each capability in the sample catalog
+        Main->>Embed: Create capability-summary embedding
+        Embed-->>Main: Return model-dimension vector
+        Main->>Neo4j: Match programs and tag capability
+    end
+    Main->>Neo4j: Ensure capability full-text and vector indexes
+
+    Note over Main, Neo4j: Tri-hybrid capability search
+    Main->>Embed: Embed capability query
+    Embed-->>Main: Return query vector
+    Main->>Neo4j: BM25 full-text capability retrieval
+    Main->>Neo4j: Capability vector retrieval
+    Main->>Neo4j: Graph-coverage heuristic retrieval
+    Main->>Main: Fuse independent rankings with RRF
     
     Main->>Neo4j: Crawl Graph Edges (EXECUTES, DEPENDS_ON, CALLS, USES_COPYBOOK)
     Neo4j-->>Main: Return Enriched Graph Context
@@ -345,6 +395,9 @@ The diagram below is a conceptual target model. The current parser and graph rep
 erDiagram
     CAPABILITY {
         string name "Business Capability (e.g., Billing & Accounts)"
+        string summary "Business intent for full-text and vector retrieval"
+        vector embedding "Embedding from the configured provider"
+        string status "Optional status filter; DEPRECATED is excluded"
     }
     
     SUBCAPABILITY {
@@ -359,7 +412,7 @@ erDiagram
     PROGRAM {
         string name "COBOL Program ID (e.g., CUSTUPD0)"
         string business_logic "Extracted business rules"
-        vector embedding "768-dim embeddinggemma vector"
+        vector embedding "Embedding from the configured provider"
     }
 
     UTILITY {
@@ -376,7 +429,7 @@ erDiagram
     }
 
     CAPABILITY ||--o{ SUBCAPABILITY : "DECOMPOSES_INTO"
-    SUBCAPABILITY ||--o{ JOB : "AUTOMATED_BY"
+    SUBCAPABILITY ||--o{ PROGRAM : "IMPLEMENTED_BY"
     JOB ||--o{ PROGRAM : "EXECUTES"
     JOB ||--o{ JOB : "DEPENDS_ON"
     PROGRAM ||--o{ PROGRAM : "CALLS"
@@ -400,10 +453,12 @@ We want to bridge the gap between high-level business domains (Business Capabili
 
 
 * **Workflow Stages:**
-    1. **Vectorization:** The capability summary is transformed into a 768-dimensional vector embedding using the local embedding model (`ai/embeddinggemma:latest`).
-    2. **Semantic Seeding & Similarity Matching:** The system queries the Neo4j vector index (`program_vectors`) to identify the closest matching core COBOL programs and business logic chunks.
-    3. **Graph Context:** The current discovery query retrieves jobs connected through `EXECUTES` and copybooks connected through `USES_COPYBOOK`. It does not yet expand scheduler dependencies or `CALLS` edges.
-    4. **Graph Tagging:** The service creates `:Capability` and `:SubCapability` nodes, connects them with `DECOMPOSES_INTO`, and links each matched program using `IMPLEMENTED_BY`.
+    1. **Capability Seeding:** `discover_and_tag` embeds each capability summary, retrieves similar COBOL programs from `program_vectors`, and stores a `:Capability` node with its summary and embedding.
+    2. **Lexical Retrieval:** `capability_text_index` ranks capability names and summaries using Neo4j full-text search (BM25).
+    3. **Semantic Retrieval:** `capability_vectors` finds capabilities whose embedded summaries are close to the query vector.
+    4. **Graph Heuristic:** `DECOMPOSES_INTO` and `IMPLEMENTED_BY` links connect capabilities to programs; their `EXECUTES` jobs and `USES_COPYBOOK` links provide structural coverage for ranking. Candidates without an implementing program are excluded.
+    5. **Reciprocal Rank Fusion:** Each channel contributes `1 / (rrf_k + rank)` to a capability's final score. This fuses ranks without adding raw BM25 and cosine scores, which use different scales.
+    6. **Status Filter:** Capabilities with `status = 'DEPRECATED'` are excluded from lexical and semantic results; missing status is treated as active.
 
 ## Business Capability Modernization Report
 To seamlessly tie this new **Capability Discovery** feature into your existing local pipeline, we can extend your architecture to automatically generate a **Business Capability Modernization Report** using the newly tagged graph context.

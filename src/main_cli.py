@@ -91,6 +91,43 @@ def run_capability_report():
     print(f"❌ Error during report generation: {e}")
 
 
+def run_tri_hybrid_capability_discovery():
+  """Fuse full-text, vector, and graph-structure capability rankings."""
+  print("\n🔎 [5] Running Tri-hybrid Capability Discovery...")
+  try:
+    from capability_catalog import seed_capability_catalog
+    from capability_discovery import CapabilityDiscoveryService
+
+    query = input("\nDescribe the capability you want to find: ").strip()
+    if not query:
+      print("Enter a non-empty capability query.")
+      return
+
+    service = CapabilityDiscoveryService()
+    print("Indexing the sample capability catalog...")
+    seed_capability_catalog(service)
+    matches = service.discover_capabilities(query, top_k=5)
+
+    if not matches:
+      print("No implemented capabilities matched the query.")
+      return
+
+    for rank, match in enumerate(matches, start=1):
+      print(
+          f"\n{rank}. {match['name']} "
+          f"(RRF {match['rrf_score']:.4f}; "
+          f"signals: {', '.join(match['matched_by'])})"
+      )
+      print(f"   {match['summary']}")
+      print(
+          "   Graph coverage: "
+          f"{match['program_count']} programs, {match['job_count']} jobs, "
+          f"{match['copybook_count']} copybooks"
+      )
+  except Exception as e:
+    print(f"❌ Error during tri-hybrid capability discovery: {e}")
+
+
 def main_menu():
   """Keep the CLI available for repeated operations until the user exits."""
   while True:
@@ -100,10 +137,11 @@ def main_menu():
     print("  [2] Run Semantic Vector Search Test")
     print("  [3] Discover & Tag Business Capabilities (Graph Enrichment)")
     print("  [4] Generate Capability Modernization Report (LLM Synthesis)")
-    print("  [5] Exit")
+    print("  [5] Tri-hybrid Capability Discovery")
+    print("  [6] Exit")
     print("-" * 65)
 
-    choice = input("Enter your choice (1-5): ").strip()
+    choice = input("Enter your choice (1-6): ").strip()
 
     # Dispatch one operation per selection; the final prompt gives the user
     # control over when the menu is redrawn.
@@ -116,10 +154,12 @@ def main_menu():
     elif choice == "4":
       run_capability_report()
     elif choice == "5":
+      run_tri_hybrid_capability_discovery()
+    elif choice == "6":
       print("\n👋 Exiting Cobol GraphRAG Modernizer. Have a great day!")
       break
     else:
-      print("❌ Invalid choice. Please enter a number between 1 and 5.")
+      print("❌ Invalid choice. Please enter a number between 1 and 6.")
     
     input("\nPress Enter to return to the main menu...")
 

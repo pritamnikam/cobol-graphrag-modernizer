@@ -26,6 +26,10 @@ class Neo4jGraphRepository:
         "CREATE CONSTRAINT IF NOT EXISTS FOR (j:Job) REQUIRE j.name IS UNIQUE",
         "CREATE CONSTRAINT IF NOT EXISTS FOR (p:Program) REQUIRE p.name IS UNIQUE",
         "CREATE CONSTRAINT IF NOT EXISTS FOR (c:Copybook) REQUIRE c.name IS UNIQUE",
+        "CREATE CONSTRAINT IF NOT EXISTS FOR (cap:Capability) "
+        "REQUIRE cap.name IS UNIQUE",
+        "CREATE CONSTRAINT IF NOT EXISTS FOR (sub:SubCapability) "
+        "REQUIRE sub.name IS UNIQUE",
     ]
     with self.driver.session() as session:
       for q in queries:
@@ -39,6 +43,7 @@ class Neo4jGraphRepository:
       embedding_model: str,
   ):
     """Merge parsed assets, embed program summaries, and create graph edges."""
+    embedding_dimensions = None
     with self.driver.session() as session:
       # Ingest Jobs
       for job in data["jobs"]:
@@ -60,6 +65,13 @@ class Neo4jGraphRepository:
             input=prog["business_logic"], model=embedding_model
         )
         embedding = response.data[0].embedding
+        if embedding_dimensions is None:
+          embedding_dimensions = len(embedding)
+        elif len(embedding) != embedding_dimensions:
+          raise ValueError(
+              "The embedding provider returned vectors with inconsistent "
+              "dimensions."
+          )
 
         session.run(
             """
@@ -104,19 +116,24 @@ class Neo4jGraphRepository:
             },
         )
 
-    self._create_vector_index()
+    self._create_vector_index(embedding_dimensions or 768)
     logger.info("Graph ingestion and vector indexing completed successfully.")
 
-  def _create_vector_index(self):
+  def _create_vector_index(self, dimensions: int):
     """Create the cosine index used by semantic search and discovery."""
-    query = """
+    if dimensions <= 0:
+      raise ValueError("Vector index dimensions must be greater than zero.")
+    query = f"""
         CREATE VECTOR INDEX program_vectors IF NOT EXISTS
         FOR (p:Program) 
         ON (p.embedding)
-        OPTIONS { indexConfig: {
-          `vector.dimensions`: 768,
+        OPTIONS {{ indexConfig: {{
+          `vector.dimensions`: {dimensions},
           `vector.similarity_function`: 'cosine'
-        }}
+        }}}}
         """
     with self.driver.session() as session:
-      session.run(query)
+      session.run(query).consume()
+      session.run(
+          "CALL db.awaitIndexes($timeout_seconds)", timeout_seconds=300
+      ).consume()
